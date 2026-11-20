@@ -1,0 +1,22 @@
+[project]
+name = "iot-property-risk-backend"
+version = "0.1.0"
+description = "Backend API server for the IoT Property Risk Monitoring System"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "pyjwt>=2.8",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+ignore = ["B008"]  # FastAPI idiom: Depends() in parameter defaults.
