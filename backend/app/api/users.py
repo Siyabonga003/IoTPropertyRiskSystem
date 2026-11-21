@@ -49,7 +49,7 @@ async def register(request: Request, db=Depends(get_db)):
     return {
         "access_token": new_user_token(user.id),
         "user": serialize_user(user),
-        "property": serialize_property(prop),
+        "property": serialize_property(prop, "owner"),
     }
 
 
@@ -62,17 +62,25 @@ def me(user=Depends(get_current_user), db=Depends(get_db)):
         .order_by(PropertyMember.joined_at)
         .all()
     )
-    return {**serialize_user(user), "properties": [serialize_property(db.get(Property, m.property_id)) for m in memberships]}
+    properties = []
+    for m in memberships:
+        prop = db.get(Property, m.property_id)
+        if prop is not None:
+            properties.append(serialize_property(prop, m.role))
+    return {**serialize_user(user), "properties": properties}
 
 
 @router.get("/api/v1/properties/{property_id}")
 def get_property(property_id: str, user=Depends(get_current_user), db=Depends(get_db)):
-    if property_id not in user_property_ids(db, user.id):
-        raise HTTPException(status_code=404, detail="Not found")
+    member = (
+        db.query(PropertyMember)
+        .filter(PropertyMember.user_id == user.id, PropertyMember.property_id == property_id)
+        .one_or_none()
+    )
     prop = db.get(Property, property_id)
-    if prop is None:
+    if prop is None or member is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return serialize_property(prop)
+    return serialize_property(prop, member.role)
 
 
 @router.get("/api/v1/alert_subscriptions")

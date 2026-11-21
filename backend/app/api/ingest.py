@@ -106,6 +106,7 @@ async def ingest_telemetry(
     device.device_health = event.device_health
     device.sensor_levels = levels
     device.risk_level = device_risk_level(levels)
+    event.device_risk = device.risk_level
     device.last_seen_at = now
 
     if event.faults and device.faults != event.faults:

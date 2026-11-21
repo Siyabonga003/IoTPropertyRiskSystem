@@ -6,7 +6,6 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
-    Request,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -14,7 +13,7 @@ from fastapi import (
 from app.api.serializers import serialize_alert, serialize_event
 from app.database import get_db
 from app.models import Alert, Device, TelemetryEvent, User
-from app.security import decode_user_token, get_current_user, user_property_ids
+from app.security import decode_user_token, user_property_ids
 
 router = APIRouter()
 
@@ -35,31 +34,10 @@ def _get_device_or_404(db, user: User, device_id: str) -> Device:
     return device
 
 
-@router.get("/api/v1/devices/{device_id}/events")
-def device_events(
-    device_id: str,
-    request: Request,
-    db=Depends(get_db),
-    user=Depends(get_current_user),
-):
-    _get_device_or_404(db, user, device_id)
-    try:
-        cursor = int(request.query_params.get("cursor", "0") or 0)
-    except ValueError:
-        cursor = 0
-    try:
-        limit = int(request.query_params.get("limit", "100"))
-    except ValueError:
-        limit = 100
-    events = (
-        db.query(TelemetryEvent)
-        .filter_by(device_id=device_id)
-        .filter(TelemetryEvent.sequence > cursor)
-        .order_by(TelemetryEvent.sequence.asc())
-        .limit(max(1, min(limit, 500)))
-        .all()
-    )
-    return {"events": [serialize_event(e) for e in events]}
+# NOTE: the HTTP route `GET /api/v1/devices/{device_id}/events` lives in
+# app/api/devices.py (registered first in app/main.py); the same path is not
+# duplicated here, which would shadow it. Only the WebSocket stream is
+# registered by this router.
 
 
 @router.websocket("/api/v1/devices/{device_id}/stream")

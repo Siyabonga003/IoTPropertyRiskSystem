@@ -107,7 +107,7 @@ static String randomHexString(int length) {
   char buf[64];
   int n = length;
   if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
-  for (int i = 0; i < n; i++) buf[i] = HEX_CHARS[random(16) % 16];
+  for (int i = 0; i < n; i++) buf[i] = HEX_CHARS[random(16)];
   buf[n] = 0;
   return String(buf);
 }
@@ -236,7 +236,10 @@ static void readSensors() {
 #else
   bool raw = digitalRead(PIN_WATER_LEAK) == (WATER_LEAK_ACTIVE_HIGH ? HIGH : LOW);
   waterDetected = raw;
-  waterLevel = raw ? 100 : 0;  // [DRAFT binary scale]
+  // [DRAFT binary scale] a detected digital leak reports the ladder's minimum
+  // non-zero level (SPEC §2: warning >= 1 — any detection); analog sensors
+  // (WATER_LEAK_ANALOG_PIN >= 0) report the full 0–100 scale.
+  waterLevel = raw ? 1 : 0;
 #endif
 }
 
@@ -351,7 +354,8 @@ static void publishTelemetry() {
   String response;
   int code = doRequest("POST", INGEST_PATH, deviceToken, json, response);
   if (code >= 200 && code < 300) {
-    if (response.indexOf("\"accepted\":false") >= 0) {
+    // FastAPI serializes as {"accepted": false, ...} (space after colon).
+    if (response.indexOf("\"accepted\": false") >= 0) {
       Serial.print("[Telemetry] backend rejected (stale) seq="); Serial.println(sequence);
     } else {
       Serial.print("[Telemetry] published seq="); Serial.println(sequence);
@@ -396,11 +400,17 @@ static String pairStatusPath() {
 }
 
 static void startPairing() {
-  pairingToken = "pt-";
-  pairingToken += randomHexString(24);
-  prefs.putString("pairing_token", pairingToken);
+  // The pairing token is issued by the backend (pair-start response); poll
+  // pair-status with that exact token until the mobile app claims it.
   String response;
   int code = doRequest("POST", pairStartPath(), "", "", response);
+  String token = jsonStringField(response, "token");
+  if (token.isEmpty()) {
+    token = "pt-";
+    token += randomHexString(24);  // [DRAFT] fallback
+  }
+  pairingToken = token;
+  prefs.putString("pairing_token", pairingToken);
   Serial.print("[Pairing] pair-start code="); Serial.print(code);
   Serial.println(" — scan the QR shown in the mobile app to complete pairing");
   lastPairingPollMs = 0;
@@ -441,6 +451,7 @@ void setup() {
 
   pinMode(PIN_SMOKE_GAS, INPUT);
   pinMode(PIN_GAS, INPUT);
+  analogReadResolution(12);  // [DRAFT] match ADC_FULL_SCALE used by readSensors/readBattery
 #if WATER_LEAK_ANALOG_PIN >= 0
   pinMode(WATER_LEAK_ANALOG_PIN, INPUT);
 #else

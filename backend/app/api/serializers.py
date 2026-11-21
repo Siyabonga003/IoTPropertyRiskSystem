@@ -24,8 +24,8 @@ def serialize_user(user: User) -> dict[str, Any]:
     }
 
 
-def serialize_property(prop) -> dict[str, Any]:
-    return {"id": prop.id, "name": prop.name, "risk_level": prop.risk_level}
+def serialize_property(prop, role: str | None = None) -> dict[str, Any]:
+    return {"id": prop.id, "name": prop.name, "risk_level": prop.risk_level, "role": role}
 
 
 def serialize_device(device: Device) -> dict[str, Any]:
