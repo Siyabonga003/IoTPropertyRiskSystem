@@ -1,6 +1,7 @@
 import 'package:iot_property_risk_mobile/core/api_client.dart';
 import 'package:iot_property_risk_mobile/core/models/alert.dart';
 import 'package:iot_property_risk_mobile/core/models/device.dart';
+import 'package:iot_property_risk_mobile/core/models/system_mode.dart';
 import 'package:iot_property_risk_mobile/core/models/user.dart';
 import 'package:iot_property_risk_mobile/core/providers/alerts_provider.dart';
 import 'package:iot_property_risk_mobile/core/providers/auth_provider.dart';
@@ -9,7 +10,13 @@ import 'package:iot_property_risk_mobile/core/token_store.dart';
 
 /// Fake ApiClient returning canned data; records calls.
 class FakeApiClient implements ApiClient {
-  FakeApiClient({this.devices = const [], this.alerts = const [], this.claimResult = const {}, this.loginError = false});
+  FakeApiClient({
+    this.devices = const [],
+    this.alerts = const [],
+    this.claimResult = const {},
+    this.loginError = false,
+    this.systemModes = const [SystemMode(propertyId: 'prp_test', mode: unarmedMode)],
+  });
   @override
   final String baseUrl = '';
   @override
@@ -18,12 +25,14 @@ class FakeApiClient implements ApiClient {
   final List<Alert> alerts;
   final Map<String, dynamic> claimResult;
   final bool loginError;
+  final List<SystemMode> systemModes;
+  final List<String> setSystemModes = [];
   final List<String> claimedTokens = [];
   final List<String> ackedAlerts = [];
 
   @override
   Future<Map<String, dynamic>> login(String email, String password) async {
-    if (loginError) throw ApiError(401, '{"detail":"UNAUTHORIZED"}');
+    if (loginError) throw ApiError(401, '{"error":{"code":"UNAUTHORIZED","message":"invalid credentials"}}');
     return {'access_token': 'fake-token', 'token_type': 'bearer'};
   }
 
@@ -47,6 +56,15 @@ class FakeApiClient implements ApiClient {
   Future<DeviceStatus> fetchDeviceStatus(String deviceId) async {
     final found = devices.firstWhere((d) => d.deviceId == deviceId, orElse: () => Device(deviceId: deviceId));
     return DeviceStatus(device: found);
+  }
+
+  @override
+  Future<List<SystemMode>> getSystemModes() async => systemModes;
+
+  @override
+  Future<SystemMode> setSystemMode(String propertyId, String mode) async {
+    setSystemModes.add('$propertyId:$mode');
+    return SystemMode(propertyId: propertyId, mode: mode);
   }
 
   @override
@@ -84,15 +102,13 @@ class FakeAuthNotifier extends AuthNotifier {
 }
 
 class FakeDevicesNotifier extends DevicesNotifier {
-  FakeDevicesNotifier(super.api, this.devices) {
-    state = devices;
+  FakeDevicesNotifier(super.api, List<Device> devices) {
+    state = DevicesState(items: devices);
   }
-  final List<Device> devices;
 }
 
 class FakeAlertsNotifier extends AlertsNotifier {
-  FakeAlertsNotifier(super.api, this.alerts) {
-    state = alerts;
+  FakeAlertsNotifier(super.api, List<Alert> alerts) {
+    state = AlertsState(items: alerts);
   }
-  final List<Alert> alerts;
 }

@@ -47,6 +47,19 @@ def test_owner_can_revoke(client, db):
     assert r.status_code == 200
 
 
+def test_revoke_resolves_open_alerts(client, db):
+    _user, prop = create_user(db)
+    make_device(db, prop.id, "esp32-owner-2")
+    token = make_device_token(db, "esp32-owner-2")
+    assert ingest(client, "esp32-owner-2", token, 1, smoke_ppm=400).status_code == 200
+    r = client.delete("/api/v1/devices/esp32-owner-2", headers={"Authorization": f"Bearer {login(client, 'alice@example.com')}"})
+    assert r.status_code == 200
+    db.expire_all()
+    alert = db.query(Alert).filter_by(device_id="esp32-owner-2", signal="smoke_gas").one()
+    assert alert.status == "resolved"
+    assert alert.resolved_at is not None
+
+
 def test_revoked_device_rejected_on_ingest(client, db):
     _user, prop = create_user(db)
     make_device(db, prop.id, "esp32-rev-1")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.serializers import serialize_property, serialize_user
+from app.api.validation import EMAIL_RE, json_object
 from app.database import get_db
 from app.models import AlertSubscription, Property, PropertyMember, User
 from app.security import (
@@ -18,9 +19,9 @@ router = APIRouter()
 
 @router.post("/api/v1/auth/login")
 async def login(request: Request, db=Depends(get_db)):
-    data = await request.json()
-    email = data.get("email", "").strip()
-    password = data.get("password", "")
+    data = await json_object(request)
+    email = str(data.get("email") or "").strip().lower()
+    password = str(data.get("password") or "")
     user = db.query(User).filter_by(email=email).one_or_none()
     if user is None or not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="UNAUTHORIZED")
@@ -29,12 +30,14 @@ async def login(request: Request, db=Depends(get_db)):
 
 @router.post("/api/v1/users")
 async def register(request: Request, db=Depends(get_db)):
-    data = await request.json()
-    name = data.get("name", "").strip()
-    email = data.get("email", "").strip()
-    password = data.get("password", "")
-    if not name or not email or len(password) < 6:
-        raise HTTPException(status_code=422, detail="name, email and password (>=6 chars) required")
+    data = await json_object(request)
+    name = str(data.get("name") or "").strip()
+    email = str(data.get("email") or "").strip().lower()
+    password = str(data.get("password") or "")
+    if not name or not EMAIL_RE.fullmatch(email) or len(password) < 6:
+        raise HTTPException(status_code=422, detail="valid name, email and password (>=6 chars) required")
+    if len(name) > 255 or len(email) > 255 or len(password) > 128:
+        raise HTTPException(status_code=422, detail="name/email/password too long")
     if db.query(User).filter_by(email=email).one_or_none():
         raise HTTPException(status_code=409, detail="EMAIL_TAKEN")
     user = User(name=name, email=email, password_hash=hash_password(password))
@@ -101,7 +104,7 @@ async def put_subscription(
 ):
     if property_id not in user_property_ids(db, user.id):
         raise HTTPException(status_code=404, detail="Not found")
-    data = await request.json()
+    data = await json_object(request)
     channels = data.get("channels", ["push"])
     if not isinstance(channels, list):
         raise HTTPException(status_code=422, detail="channels must be a list")

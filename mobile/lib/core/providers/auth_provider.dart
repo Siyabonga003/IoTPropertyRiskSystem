@@ -25,7 +25,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     try {
       state = AuthState(user: await _api.me());
     } catch (e) {
-      state = AuthState(error: e.toString());
+      state = AuthState(error: apiErrorMessage(e));
     }
   }
 
@@ -39,7 +39,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
       state = AuthState(user: await _api.me());
       return true;
     } catch (e) {
-      state = AuthState(error: e.toString());
+      final message = e is ApiError && e.statusCode == 401
+          ? 'Incorrect email or password.'
+          : apiErrorMessage(e);
+      state = AuthState(error: message);
       return false;
     }
   }
@@ -54,7 +57,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       state = AuthState(user: await _api.me());
       return true;
     } catch (e) {
-      state = AuthState(error: e.toString());
+      state = AuthState(error: apiErrorMessage(e));
       return false;
     }
   }

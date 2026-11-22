@@ -1,10 +1,12 @@
 import '../core/models/device.dart';
 import '../core/models/risk.dart';
 
-RiskLevel riskOf(Device d) => RiskLevel.values[d.riskLevel.clamp(0, RiskLevel.values.length - 1).toInt()];
+RiskLevel riskLevelOf(int value) =>
+    RiskLevel.values[value.clamp(0, RiskLevel.values.length - 1).toInt()];
 
-RiskLevel signalRisk(Device d, String signal) =>
-    RiskLevel.values[(d.sensorLevels[signal] ?? 0).clamp(0, RiskLevel.values.length - 1).toInt()];
+RiskLevel riskOf(Device d) => riskLevelOf(d.riskLevel);
+
+RiskLevel signalRisk(Device d, String signal) => riskLevelOf(d.sensorLevels[signal] ?? 0);
 
 String formatTime(DateTime? dt) {
   if (dt == null) return '-';

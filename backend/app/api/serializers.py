@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC
 from typing import Any
 
-from app.models import Alert, Device, TelemetryEvent, User
+from app.models import UNARMED, Alert, Device, TelemetryEvent, User
 
 
 def iso(dt) -> str | None:
@@ -28,7 +28,7 @@ def serialize_property(prop, role: str | None = None) -> dict[str, Any]:
     return {"id": prop.id, "name": prop.name, "risk_level": prop.risk_level, "role": role}
 
 
-def serialize_device(device: Device) -> dict[str, Any]:
+def serialize_device(device: Device, system_mode: str = UNARMED) -> dict[str, Any]:
     return {
         "device_id": device.device_id,
         "property_id": device.property_id,
@@ -49,6 +49,7 @@ def serialize_device(device: Device) -> dict[str, Any]:
         "rssi_dbm": device.rssi_dbm,
         "device_health": device.device_health,
         "faults": device.faults,
+        "system_mode": system_mode,
     }
 
 
@@ -69,7 +70,28 @@ def serialize_event(event: TelemetryEvent) -> dict[str, Any]:
         "rssi_dbm": event.rssi_dbm,
         "device_health": event.device_health,
         "device_risk": event.device_risk,
+        "armed_mode": event.armed_mode or UNARMED,
         "faults": event.faults,
+    }
+
+
+def serialize_system_mode(row, property_id: str) -> dict[str, Any]:
+    return {
+        "property_id": property_id,
+        "mode": row.mode if row is not None else UNARMED,
+        "updated_at": iso(row.updated_at) if row is not None else None,
+        "updated_by": row.updated_by if row is not None else None,
+    }
+
+
+def serialize_system_mode_history(row) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "property_id": row.property_id,
+        "mode": row.mode,
+        "changed_by": row.changed_by,
+        "changed_at": iso(row.changed_at),
+        "reason": row.reason,
     }
 
 
@@ -82,6 +104,7 @@ def serialize_alert(alert: Alert) -> dict[str, Any]:
         "severity": alert.severity,
         "status": alert.status,
         "notes": alert.notes,
+        "system_mode": alert.armed_mode or UNARMED,
         "first_seen_at": iso(alert.first_seen_at),
         "last_seen_at": iso(alert.last_seen_at),
         "acknowledged_at": iso(alert.acknowledged_at),

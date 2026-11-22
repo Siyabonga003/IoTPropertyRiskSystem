@@ -46,5 +46,6 @@ void main() {
     expect(find.text('Water Leak'), findsOneWidget);
     expect(find.text('Motion'), findsOneWidget);
     expect(find.text('warning').evaluate().length, greaterThanOrEqualTo(1));
+    expect(find.textContaining('Unarmed'), findsWidgets);
   });
 }

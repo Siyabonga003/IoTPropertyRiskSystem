@@ -21,8 +21,9 @@ class SensorCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       elevation: 1,
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

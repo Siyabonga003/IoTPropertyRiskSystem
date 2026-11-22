@@ -1,6 +1,9 @@
 /// Shared JSON parsing helpers for backend (snake_case) payloads.
 int intOf(dynamic value) => value is num ? value.toInt() : 0;
 
+/// Nullable integer helper for optional telemetry fields.
+int? intOrNull(dynamic value) => value is num ? value.toInt() : null;
+
 double? doubleOf(dynamic value) => value is num ? value.toDouble() : null;
 
 DateTime? parseDateTime(dynamic value) {

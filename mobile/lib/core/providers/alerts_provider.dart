@@ -4,22 +4,49 @@ import '../api_client.dart';
 import '../models/alert.dart';
 import 'api_provider.dart';
 
-/// Active (non-resolved) alerts for the user's properties.
-class AlertsNotifier extends StateNotifier<List<Alert>> {
-  AlertsNotifier(ApiClient api) : _api = api, super(const []) {
+/// Alerts plus the loading/error state needed for a clean first paint.
+class AlertsState {
+  const AlertsState({this.items = const [], this.loading = false, this.error});
+  final List<Alert> items;
+  final bool loading;
+  final String? error;
+
+  List<Alert> get active => items.where((a) => a.status != 'resolved').toList();
+}
+
+class AlertsNotifier extends StateNotifier<AlertsState> {
+  AlertsNotifier(ApiClient api) : _api = api, super(const AlertsState(loading: true)) {
     refresh();
   }
   final ApiClient _api;
+  bool _inFlight = false;
+  bool _disposed = false;
 
-  Future<void> refresh() async {
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  Future<void> refresh({bool showLoading = false}) async {
+    if (_inFlight) return;
+    _inFlight = true;
+    if (showLoading || state.items.isEmpty) {
+      state = AlertsState(items: state.items, loading: true);
+    }
     try {
-      state = await _api.listAlerts();
-    } catch (_) {
-      // Retry on next poll.
+      final items = await _api.listAlerts();
+      if (_disposed) return;
+      state = AlertsState(items: items);
+    } catch (error) {
+      if (_disposed) return;
+      state = AlertsState(items: state.items, error: apiErrorMessage(error));
+    } finally {
+      _inFlight = false;
     }
   }
 }
 
-final alertsProvider = StateNotifierProvider<AlertsNotifier, List<Alert>>(
+final alertsProvider = StateNotifierProvider<AlertsNotifier, AlertsState>(
   (ref) => AlertsNotifier(ref.watch(apiProvider)),
 );

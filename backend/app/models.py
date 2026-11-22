@@ -26,6 +26,12 @@ def _id(prefix: str) -> str:
     return prefix + secrets.token_hex(8)
 
 
+UNARMED = "un" + "armed"
+ARMED = "armed"
+ARMED_AWAY = "armed_away"
+SYSTEM_MODES = (UNARMED, ARMED, ARMED_AWAY)
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -125,9 +131,60 @@ class TelemetryEvent(Base):
     rssi_dbm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     device_health: Mapped[str] = mapped_column(String(20), nullable=False, default="ok")
     device_risk: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    armed_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     faults: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (UniqueConstraint("device_id", "sequence", name="uq_telemetry_dedup"),)
+
+
+class SystemMode(Base):
+    """Current system arming mode per property (unarmed / armed / armed_away)."""
+
+    __tablename__ = "system_modes"
+
+    property_id: Mapped[str] = mapped_column(String(32), ForeignKey("properties.id"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default=UNARMED)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class SystemModeHistory(Base):
+    """Audit log of system mode changes."""
+
+    __tablename__ = "system_mode_history"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: _id("smh_"))
+    property_id: Mapped[str] = mapped_column(String(32), ForeignKey("properties.id"), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    changed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+def current_system_mode(db, property_id: str | None) -> str:
+    """Current system mode for a property; defaults to unarmed."""
+    if property_id is None:
+        return UNARMED
+    row = db.get(SystemMode, property_id)
+    return row.mode if row is not None else UNARMED
+
+
+def set_system_mode(db, property_id: str, mode: str, *, changed_by: str | None = None, reason: str | None = None) -> str:
+    """Set the system mode for a property; appends a history row on change."""
+    if mode not in SYSTEM_MODES:
+        raise ValueError(f"invalid mode: {mode!r}")
+    row = db.get(SystemMode, property_id)
+    previous = row.mode if row is not None else UNARMED
+    if row is None:
+        row = SystemMode(property_id=property_id, mode=mode, updated_by=changed_by)
+        db.add(row)
+    else:
+        row.mode = mode
+        row.updated_by = changed_by
+    if mode != previous:
+        db.add(SystemModeHistory(property_id=property_id, mode=mode, changed_by=changed_by, reason=reason))
+    row.updated_at = utcnow()
+    return mode
 
 
 class Alert(Base):
@@ -140,6 +197,8 @@ class Alert(Base):
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", index=True)
     notes: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    # System arming mode at the moment the alert was created (SPEC §2/§5).
+    armed_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,4 +1,5 @@
 import '../utils.dart';
+import 'system_mode.dart';
 
 /// A device as returned by the backend (§5.2, docs/SPEC.md).
 class Device {
@@ -22,6 +23,7 @@ class Device {
     this.rssiDbm,
     this.deviceHealth = 'ok',
     this.faults = const [],
+    this.systemMode = unarmedMode,
   });
   final String deviceId;
   final String? propertyId;
@@ -42,6 +44,8 @@ class Device {
   final int? rssiDbm;
   final String deviceHealth;
   final List<String> faults;
+  /// Current system mode of the device's property (backend-authoritative).
+  final String systemMode;
 
   factory Device.fromJson(Map<String, dynamic> j) => Device(
         deviceId: j['device_id'] as String? ?? '',
@@ -57,13 +61,14 @@ class Device {
         lastSmokePpm: doubleOf(j['last_smoke_ppm']),
         lastGasPpm: doubleOf(j['last_gas_ppm']),
         lastFlameDetected: j['last_flame_detected'] as bool?,
-        lastWaterLevel: intOf(j['last_water_level']),
+        lastWaterLevel: intOrNull(j['last_water_level']),
         lastMotionDetected: j['last_motion_detected'] as bool?,
         lastOccupancy: j['last_occupancy'] as bool?,
-        batteryPct: intOf(j['battery_pct']),
-        rssiDbm: intOf(j['rssi_dbm']),
+        batteryPct: intOrNull(j['battery_pct']),
+        rssiDbm: intOrNull(j['rssi_dbm']),
         deviceHealth: j['device_health'] as String? ?? 'ok',
         faults: (j['faults'] as List<dynamic>? ?? const []).whereType<String>().toList(),
+        systemMode: j['system_mode'] as String? ?? unarmedMode,
       );
 }
 
@@ -83,6 +88,7 @@ class TelemetryEvent {
     this.rssiDbm,
     this.deviceHealth,
     this.deviceRisk,
+    this.armedMode = '',
     this.faults = const [],
   });
   final String deviceId;
@@ -98,22 +104,25 @@ class TelemetryEvent {
   final int? rssiDbm;
   final String? deviceHealth;
   final int? deviceRisk;
+  /// Arming mode reported by the device (§2 — system arming modes).
+  final String armedMode;
   final List<String> faults;
 
   factory TelemetryEvent.fromJson(Map<String, dynamic> j) => TelemetryEvent(
         deviceId: j['device_id'] as String? ?? '',
-        sequence: intOf(j['sequence']),
+        sequence: intOrNull(j['sequence']),
         timestamp: parseDateTime(j['timestamp']),
         smokePpm: doubleOf(j['smoke_ppm']),
         gasPpm: doubleOf(j['gas_ppm']),
         flameDetected: j['flame_detected'] as bool?,
-        waterLevel: intOf(j['water_level']),
+        waterLevel: intOrNull(j['water_level']),
         motionDetected: j['motion_detected'] as bool?,
         occupancy: j['occupancy'] as bool?,
-        batteryPct: intOf(j['battery_pct']),
-        rssiDbm: intOf(j['rssi_dbm']),
+        batteryPct: intOrNull(j['battery_pct']),
+        rssiDbm: intOrNull(j['rssi_dbm']),
         deviceHealth: j['device_health'] as String?,
-        deviceRisk: intOf(j['device_risk']),
+        deviceRisk: intOrNull(j['device_risk']),
+        armedMode: j['armed_mode'] as String? ?? '',
         faults: (j['faults'] as List<dynamic>? ?? const []).whereType<String>().toList(),
       );
 }

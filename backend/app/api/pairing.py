@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app import pairing as pairing_service
+from app.api.validation import json_object
 from app.database import get_db
 from app.security import bearer_token, get_current_user
 
@@ -22,7 +23,7 @@ def pair_status(device_id: str, request: Request, db=Depends(get_db)):
 
 @router.post("/api/v1/pair")
 async def pair(request: Request, db=Depends(get_db), user=Depends(get_current_user)):
-    data = await request.json()
+    data = await json_object(request)
     token = data.get("token")
     if not isinstance(token, str) or not token:
         raise HTTPException(status_code=401, detail="TOKEN_INVALID")

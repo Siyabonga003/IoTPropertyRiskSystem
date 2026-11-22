@@ -84,3 +84,47 @@ def test_pair_expired_token(client, db):
     db.commit()
     r = client.get("/api/v1/devices/esp32-p6/pair-status", headers={"Authorization": f"Bearer {data['token']}"})
     assert r.status_code == 401
+
+
+def test_viewer_cannot_claim_device(client, db):
+    create_user(db, email="viewer@example.com", name="Viewer", role="viewer")
+    data = pair_start(client, "esp32-p7")
+    r = client.post(
+        "/api/v1/pair",
+        json={"token": data["token"]},
+        headers={"Authorization": f"Bearer {login(client, 'viewer@example.com')}"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_repair_revoked_device_reuses_token_row(client, db):
+    create_user(db, email="erin@example.com", name="Erin")
+    user_token = login(client, "erin@example.com")
+    data = pair_start(client, "esp32-p8")
+    r = client.post("/api/v1/pair", json={"token": data["token"]}, headers={"Authorization": f"Bearer {user_token}"})
+    assert r.status_code == 200
+    first_token = r.json()["device_token"]
+    r = client.delete("/api/v1/devices/esp32-p8", headers={"Authorization": f"Bearer {user_token}"})
+    assert r.status_code == 200
+    # Re-pair the revoked device; the unique device_tokens row is reused.
+    data = pair_start(client, "esp32-p8")
+    r = client.post("/api/v1/pair", json={"token": data["token"]}, headers={"Authorization": f"Bearer {user_token}"})
+    assert r.status_code == 200, r.text
+    second_token = r.json()["device_token"]
+    assert second_token != first_token
+    db.expire_all()
+    assert db.query(Device).filter_by(device_id="esp32-p8").one().status == "active"
+    # New credential works, old one no longer does.
+    r = client.post(
+        "/api/v1/ingest/telemetry",
+        json={"sequence": 1},
+        headers={"Authorization": f"Bearer {second_token}"},
+    )
+    assert r.status_code == 200
+    r = client.post(
+        "/api/v1/ingest/telemetry",
+        json={"sequence": 2},
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
+    assert r.status_code == 401

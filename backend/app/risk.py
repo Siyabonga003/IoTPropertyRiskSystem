@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from app.config import config
-from app.models import Alert, Device, Property, utcnow
+from app.models import Alert, Device, Property, current_system_mode, utcnow
 from app.thresholds import Level, device_risk_level
 
 # Fail-safe risk contribution per signal when a device is marked disconnected
@@ -42,7 +42,8 @@ def recompute_property_risk(db, property_id: str | None) -> int:
     prop = db.get(Property, property_id)
     if prop is None:
         return 0
-    risk = max((d.risk_level or 0 for d in db.query(Device).filter_by(property_id=property_id).all()), default=0)
+    devices = db.query(Device).filter(Device.property_id == property_id, Device.status != "revoked").all()
+    risk = max((d.risk_level or 0 for d in devices), default=0)
     prop.risk_level = risk
     db.add(prop)
     return risk
@@ -65,6 +66,7 @@ def check_stale_devices(db) -> list[Device]:
                     signal="device_disconnected",
                     severity="warning",
                     status="open",
+                    armed_mode=current_system_mode(db, device.property_id),
                     first_seen_at=now,
                     last_seen_at=now,
                     notes="Device disconnected: no telemetry within the timeout.",

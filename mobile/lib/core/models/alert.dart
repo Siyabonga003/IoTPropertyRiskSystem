@@ -1,4 +1,5 @@
 import '../utils.dart';
+import 'system_mode.dart';
 
 /// Alert model (§3.3, docs/SPEC.md).
 class Alert {
@@ -10,6 +11,7 @@ class Alert {
     required this.severity,
     required this.status,
     this.notes = '',
+    this.systemMode = unarmedMode,
     this.firstSeenAt,
     this.lastSeenAt,
     this.acknowledgedAt,
@@ -22,6 +24,8 @@ class Alert {
   final String severity;
   final String status;
   final String notes;
+  /// System arming mode of the property at the time the alert was created.
+  final String systemMode;
   final DateTime? firstSeenAt;
   final DateTime? lastSeenAt;
   final DateTime? acknowledgedAt;
@@ -37,6 +41,7 @@ class Alert {
         severity: j['severity'] as String? ?? '',
         status: j['status'] as String? ?? 'open',
         notes: j['notes'] as String? ?? '',
+        systemMode: j['system_mode'] as String? ?? unarmedMode,
         firstSeenAt: parseDateTime(j['first_seen_at']),
         lastSeenAt: parseDateTime(j['last_seen_at']),
         acknowledgedAt: parseDateTime(j['acknowledged_at']),

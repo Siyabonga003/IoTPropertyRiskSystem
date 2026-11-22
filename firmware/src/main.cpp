@@ -36,7 +36,7 @@
 #define PIN_SMOKE_GAS 34                   // analog input — smoke/gas sensor
 #define PIN_GAS 35                         // analog input — gas sensor
 #define PIN_FLAME 4                        // digital input — flame sensor
-#define PIN_WATER_LEAK 5                   // digital input — water leak sensor
+#define WATER_PIN 5                        // digital input — water leak sensor
 #define PIN_MOTION 12                      // digital input — motion (PIR) sensor
 #define BATTERY_ENABLED 1                  // 0 = omit battery_pct
 #define BATTERY_PIN 36                     // ADC pin — battery voltage divider
@@ -55,12 +55,14 @@
 #define MOTION_ACTIVE_HIGH 1
 
 // Motion debounce / occupancy (docs/SPEC.md §2.6)
+#define MOTION_SAMPLE_MS 50                 // sample PIR frequently; latch events for telemetry
 #define MOTION_DEBOUNCE_MS 200
 #define OCCUPANCY_TIMEOUT_MS 60000UL       // occupancy expires 60 s after motion
 
 // Telemetry cadence / offline buffering
 #define TELEMETRY_INTERVAL_MS 5000
 #define PAIR_STATUS_POLL_MS 5000
+#define PAIRING_RETRY_MS 15000UL          // backoff after pairing errors
 #define MAX_PENDING_BUFFER 64
 
 // ---------------------------------------------------------------------------
@@ -82,13 +84,18 @@ float gasPpm = 0.0;
 bool flameDetected = false;
 bool waterDetected = false;
 int waterLevel = 0;
-bool motionEvent = false;   // debounced motion event this interval
+bool motionEvent = false;       // debounced motion event included in this telemetry
+bool motionLatched = false;     // a motion event occurred since the last telemetry
+bool motionRawActive = false;   // PIR currently reads active (for occupancy)
+String systemMode = "unarmed";   // current system mode: unarmed / armed / armed_away
 int batteryPct = -1;
 
 unsigned long lastReadMs = 0;
 unsigned long lastPairingPollMs = 0;
+unsigned long pairingRetryAtMs = 0;   // backoff after pairing errors (e.g. 401/429)
+unsigned long lastModePollMs = 0;
+unsigned long lastMotionSampleMs = 0;
 unsigned long smokeWarmupEndMs = 0;
-unsigned long motionLastRawMs = 0;
 unsigned long motionLastEventMs = 0;
 
 struct BufferEntry {
@@ -168,6 +175,7 @@ static String backendUrl(const String& path, bool useTls) {
 // Minimal REST helper: method is "GET" or "POST"; bearer may be empty.
 static int doRequest(const String& method, const String& path, const String& bearer,
                      const String& body, String& responseOut) {
+  if (!wifiConnected) return -1;  // never block the main loop on a dead network
   HTTPClient http;
   http.setTimeout(5000);
 #if BACKEND_USE_TLS
@@ -231,10 +239,11 @@ static void readSensors() {
   flameDetected = digitalRead(PIN_FLAME) == (FLAME_ACTIVE_HIGH ? HIGH : LOW);
 
 #if WATER_LEAK_ANALOG_PIN >= 0
-  waterLevel = (int)map(analogRead(WATER_LEAK_ANALOG_PIN), 0, ADC_FULL_SCALE, 0, 100);
+  long rawLevel = map(analogRead(WATER_LEAK_ANALOG_PIN), 0, ADC_FULL_SCALE, 0, 100);
+  waterLevel = (int)constrain(rawLevel, 0, 100);
   waterDetected = waterLevel > 0;
 #else
-  bool raw = digitalRead(PIN_WATER_LEAK) == (WATER_LEAK_ACTIVE_HIGH ? HIGH : LOW);
+  bool raw = digitalRead(WATER_PIN) == (WATER_LEAK_ACTIVE_HIGH ? HIGH : LOW);
   waterDetected = raw;
   // [DRAFT binary scale] a detected digital leak reports the ladder's minimum
   // non-zero level (SPEC §2: warning >= 1 — any detection); analog sensors
@@ -246,24 +255,34 @@ static void readSensors() {
 static void readBattery() {
 #if BATTERY_ENABLED
   int raw = analogRead(BATTERY_PIN);
-  batteryPct = raw > 0 ? (int)map(raw, 0, ADC_FULL_SCALE, 0, 100) : -1;
+  batteryPct = raw > 0 ? (int)constrain(map(raw, 0, ADC_FULL_SCALE, 0, 100), 0, 100) : -1;
 #else
   batteryPct = -1;
 #endif
 }
 
-static void updateMotion() {
-  motionEvent = false;
+// Sample the PIR often (not just once per telemetry interval) and latch rising
+// edges so short motion events are still reported.
+static void sampleMotion() {
   unsigned long now = millis();
+  if (now - lastMotionSampleMs < MOTION_SAMPLE_MS) return;
+  lastMotionSampleMs = now;
   bool raw = digitalRead(PIN_MOTION) == (MOTION_ACTIVE_HIGH ? HIGH : LOW);
-  if (raw && (motionLastRawMs == 0 || now - motionLastRawMs > MOTION_DEBOUNCE_MS)) {
-    motionEvent = true;
+  if (raw && !motionRawActive && (motionLastEventMs == 0 || now - motionLastEventMs >= MOTION_DEBOUNCE_MS)) {
+    motionLatched = true;
     motionLastEventMs = now;
   }
-  motionLastRawMs = now;
+  motionRawActive = raw;
+}
+
+// Move the latched event into the next telemetry payload.
+static void captureMotionEvent() {
+  motionEvent = motionLatched;
+  motionLatched = false;
 }
 
 static bool occupancyActive() {
+  if (motionRawActive) return true;
   return motionLastEventMs != 0 && (millis() - motionLastEventMs) < OCCUPANCY_TIMEOUT_MS;
 }
 
@@ -295,6 +314,7 @@ static String buildTelemetry() {
   json += ",\"rssi_dbm\":";
   json += (wifiConnected && rssiDbm != 0) ? String(rssiDbm) : String("null");
   json += ",\"device_health\":\""; json += deviceHealth(); json += "\"";
+  json += ",\"armed_mode\":\""; json += systemMode; json += "\"";
   json += ",\"faults\":[";
   bool first = true;
   if (smokeWarmupActive()) appendFault(json, "smoke_gas_warmup", first);
@@ -401,27 +421,41 @@ static String pairStatusPath() {
 
 static void startPairing() {
   // The pairing token is issued by the backend (pair-start response); poll
-  // pair-status with that exact token until the mobile app claims it.
+  // pair-status with that exact token until the mobile app claims it. Never
+  // invent a token locally — the backend would not recognise it.
   String response;
   int code = doRequest("POST", pairStartPath(), "", "", response);
   String token = jsonStringField(response, "token");
-  if (token.isEmpty()) {
-    token = "pt-";
-    token += randomHexString(24);  // [DRAFT] fallback
+  if (code < 200 || code >= 300 || token.isEmpty()) {
+    Serial.print("[Pairing] pair-start failed (code="); Serial.print(code);
+    Serial.println("); will retry");
+    pairingRetryAtMs = millis() + PAIRING_RETRY_MS;
+    return;
   }
   pairingToken = token;
   prefs.putString("pairing_token", pairingToken);
   Serial.print("[Pairing] pair-start code="); Serial.print(code);
   Serial.println(" — scan the QR shown in the mobile app to complete pairing");
-  lastPairingPollMs = 0;
 }
 
 static void handlePairing() {
+  if (!wifiConnected) return;
+  unsigned long now = millis();
+  if (now < pairingRetryAtMs) return;
+  if (now - lastPairingPollMs < PAIR_STATUS_POLL_MS) return;
+  lastPairingPollMs = now;
   if (!pairingToken.isEmpty()) {
-    if (millis() - lastPairingPollMs < PAIR_STATUS_POLL_MS) return;
-    lastPairingPollMs = millis();
     String response;
     int code = doRequest("GET", pairStatusPath(), pairingToken, "", response);
+    if (code == 401) {
+      // Expired/unrecognised pairing token (e.g. device was offline past the
+      // TTL): drop it and start a fresh pairing session after a short backoff.
+      Serial.println("[Pairing] pairing token rejected — starting a new session");
+      pairingToken = "";
+      prefs.putString("pairing_token", "");
+      pairingRetryAtMs = now + PAIRING_RETRY_MS;
+      return;
+    }
     if (code >= 200 && code < 300) {
       String status = jsonStringField(response, "status");
       if (status == "active") {
@@ -440,6 +474,30 @@ static void handlePairing() {
   if (deviceToken.isEmpty()) startPairing();
 }
 
+static String modePath() {
+  String p;
+  p += "/api/v1/devices/"; p += deviceId; p += "/mode";
+  return p;
+}
+
+// Sync system mode down from the backend (SPEC §4 — system mode endpoints).
+static void pollSystemMode() {
+  if (!wifiConnected || deviceToken.isEmpty()) return;
+  unsigned long now = millis();
+  if (now - lastModePollMs < TELEMETRY_INTERVAL_MS) return;
+  lastModePollMs = now;
+  String response;
+  int code = doRequest("GET", modePath(), deviceToken, "", response);
+  if (code < 200 || code >= 300) return;
+  String m = jsonStringField(response, "mode");
+  if (m != "unarmed" && m != "armed" && m != "armed_away") return;  // unarmed
+  if (m != systemMode) {
+    systemMode = m;
+    prefs.putString("system_mode", systemMode);
+    Serial.print("[Mode] "); Serial.println(systemMode);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Arduino lifecycle
 // ---------------------------------------------------------------------------
@@ -455,7 +513,7 @@ void setup() {
 #if WATER_LEAK_ANALOG_PIN >= 0
   pinMode(WATER_LEAK_ANALOG_PIN, INPUT);
 #else
-  pinMode(PIN_WATER_LEAK, INPUT);
+  pinMode(WATER_PIN, INPUT);
 #endif
   pinMode(PIN_FLAME, INPUT);
   pinMode(PIN_MOTION, INPUT);
@@ -481,10 +539,18 @@ void setup() {
 
   deviceToken = prefs.getString("device_token", "");
   pairingToken = prefs.getString("pairing_token", "");
+  if (!deviceToken.isEmpty() && !pairingToken.isEmpty()) {
+    // Already paired: a leftover pairing token is stale and would block telemetry.
+    pairingToken = "";
+    prefs.putString("pairing_token", "");
+  }
   sequence = prefs.getULong("last_sequence", 0);
+  systemMode = prefs.getString("system_mode", "unarmed");
+  if (systemMode != "unarmed" && systemMode != "armed" && systemMode != "armed_away") systemMode = "unarmed";
+  prefs.putString("system_mode", systemMode);
 
   smokeWarmupEndMs = millis() + SMOKE_GAS_WARMUP_MS;
-  motionLastRawMs = millis();
+  lastMotionSampleMs = millis();
   lastReadMs = millis();
 
   Serial.print("[Boot] device_id="); Serial.println(deviceId);
@@ -493,12 +559,14 @@ void setup() {
 
 void loop() {
   handleNetwork();
+  sampleMotion();
   handlePairing();
+  pollSystemMode();
 
   unsigned long now = millis();
   if (now - lastReadMs >= TELEMETRY_INTERVAL_MS) {
     lastReadMs = now;
-    updateMotion();
+    captureMotionEvent();
     readSensors();
     readBattery();
     publishTelemetry();

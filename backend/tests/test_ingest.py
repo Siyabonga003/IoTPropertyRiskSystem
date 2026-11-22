@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from app.models import Alert, Device, Property, TelemetryEvent
+from app.models import ARMED, Alert, Device, Property, TelemetryEvent
 from app.thresholds import Level
-from tests.conftest import create_user, ingest, make_device, make_device_token
+from tests.conftest import create_user, ingest, login, make_device, make_device_token
 
 
 def test_smoke_warning_alert(client, db):
@@ -83,6 +83,12 @@ def test_motion_notice(client, db):
     _user, prop = create_user(db)
     make_device(db, prop.id, "esp32-motion-1")
     token = make_device_token(db, "esp32-motion-1")
+    r = client.put(
+        f"/api/v1/system/modes/{prop.id}",
+        json={"mode": ARMED},
+        headers={"Authorization": f"Bearer {login(client, 'alice@example.com')}"},
+    )
+    assert r.status_code == 200, r.text
     r = ingest(client, "esp32-motion-1", token, 1, motion_detected=True)
     assert r.status_code == 200
     db.expire_all()
@@ -145,3 +151,77 @@ def test_sensor_faults_create_alert(client, db):
     alert = db.query(Alert).filter_by(device_id="esp32-fault-1", signal="sensor_fault").one()
     assert alert.severity == "notice"
     assert "heater_timeout" in alert.notes
+
+
+def test_sensor_fault_resolves_when_cleared(client, db):
+    _user, prop = create_user(db)
+    make_device(db, prop.id, "esp32-fault-2")
+    token = make_device_token(db, "esp32-fault-2")
+    assert ingest(client, "esp32-fault-2", token, 1, faults=["heater_timeout"]).status_code == 200
+    assert ingest(client, "esp32-fault-2", token, 2, faults=[]).status_code == 200
+    db.expire_all()
+    device = db.query(Device).filter_by(device_id="esp32-fault-2").one()
+    assert device.faults is None
+    alert = db.query(Alert).filter_by(device_id="esp32-fault-2", signal="sensor_fault").one()
+    assert alert.status == "resolved"
+    assert alert.resolved_at is not None
+
+
+def test_disconnected_device_recovers_on_telemetry(client, db):
+    _user, prop = create_user(db)
+    make_device(db, prop.id, "esp32-recover-1", status="disconnected")
+    token = make_device_token(db, "esp32-recover-1")
+    db.add(
+        Alert(
+            property_id=prop.id,
+            device_id="esp32-recover-1",
+            signal="device_disconnected",
+            severity="warning",
+            status="open",
+            notes="offline",
+        )
+    )
+    db.commit()
+    r = ingest(client, "esp32-recover-1", token, 1, smoke_ppm=0)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    device = db.query(Device).filter_by(device_id="esp32-recover-1").one()
+    assert device.status == "active"
+    alert = db.query(Alert).filter_by(device_id="esp32-recover-1", signal="device_disconnected").one()
+    assert alert.status == "resolved"
+
+
+def test_alert_carries_arming_mode(client, db):
+    _user, prop = create_user(db)
+    make_device(db, prop.id, "esp32-mode-alert-1")
+    token = make_device_token(db, "esp32-mode-alert-1")
+    assert ingest(client, "esp32-mode-alert-1", token, 1, smoke_ppm=400, armed_mode=ARMED).status_code == 200
+    db.expire_all()
+    alert = db.query(Alert).filter_by(device_id="esp32-mode-alert-1", signal="smoke_gas").one()
+    assert alert.armed_mode == ARMED
+    r = client.get(
+        "/api/v1/alerts",
+        headers={"Authorization": f"Bearer {login(client, 'alice@example.com')}"},
+    )
+    assert r.json()["items"][0]["system_mode"] == ARMED
+
+
+def test_invalid_telemetry_shapes_rejected(client, db):
+    _user, prop = create_user(db)
+    make_device(db, prop.id, "esp32-shape-1")
+    token = make_device_token(db, "esp32-shape-1")
+    headers = {"Authorization": f"Bearer {token}"}
+    # sensors must be an object; a list is rejected rather than crashing.
+    r = client.post(
+        "/api/v1/ingest/telemetry",
+        json={"sequence": 1, "sensors": ["nope"]},
+        headers=headers,
+    )
+    assert r.status_code == 422
+    r = client.post(
+        "/api/v1/ingest/telemetry",
+        json={"sequence": 2, "device_health": "exploded"},
+        headers=headers,
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "INVALID"

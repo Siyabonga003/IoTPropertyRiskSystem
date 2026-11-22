@@ -44,6 +44,6 @@ void main() {
     await tester.enterText(find.byType(TextField).at(1), 'secret');
     await tester.tap(find.text('Log In'));
     await tester.pump(const Duration(milliseconds: 200));
-    expect(find.textContaining('UNAUTHORIZED'), findsOneWidget);
+    expect(find.textContaining('Incorrect email or password'), findsOneWidget);
   });
 }
